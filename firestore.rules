@@ -1,0 +1,118 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default-deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // Users Collection (Strict PII isolation, owner-only)
+    match /users/{userId} {
+      allow get: if isValidId(userId) && isOwner(userId);
+      allow list: if false; // Blanket listing forbidden
+      allow create: if isValidId(userId) && isOwner(userId) && request.resource.data.userId == request.auth.uid;
+      allow update: if isValidId(userId) && isOwner(userId) && request.resource.data.userId == request.auth.uid;
+      allow delete: if isValidId(userId) && isOwner(userId);
+    }
+
+    // Courses Collection
+    match /courses/{courseId} {
+      allow get, delete: if isValidId(courseId) && isSignedIn() && resource.data.userId == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isValidId(courseId) && isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow update: if isValidId(courseId) && isSignedIn() && resource.data.userId == request.auth.uid && request.resource.data.userId == request.auth.uid;
+    }
+
+    // Lectures Collection
+    match /lectures/{lectureId} {
+      allow get, delete: if isValidId(lectureId) && isSignedIn() && resource.data.userId == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isValidId(lectureId) && isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow update: if isValidId(lectureId) && isSignedIn() && resource.data.userId == request.auth.uid && request.resource.data.userId == request.auth.uid;
+    }
+
+    // AI Tutor Conversations Collection
+    match /tutor_conversations/{conversationId} {
+      allow get, delete: if isValidId(conversationId) && isSignedIn() && resource.data.userId == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isValidId(conversationId) && isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow update: if isValidId(conversationId) && isSignedIn() && resource.data.userId == request.auth.uid && request.resource.data.userId == request.auth.uid;
+
+      match /messages/{messageId} {
+        allow get, delete: if isValidId(messageId) && isSignedIn() && resource.data.userId == request.auth.uid;
+        allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+        allow create: if isValidId(messageId) && isSignedIn() && request.resource.data.userId == request.auth.uid;
+        allow update: if isValidId(messageId) && isSignedIn() && resource.data.userId == request.auth.uid && request.resource.data.userId == request.auth.uid;
+      }
+    }
+
+    // Flashcard Decks Collection
+    match /flashcard_decks/{deckId} {
+      allow get, delete: if isValidId(deckId) && isSignedIn() && resource.data.userId == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isValidId(deckId) && isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow update: if isValidId(deckId) && isSignedIn() && resource.data.userId == request.auth.uid && request.resource.data.userId == request.auth.uid;
+    }
+
+    // Flashcards Collection
+    match /flashcards/{cardId} {
+      allow get, delete: if isValidId(cardId) && isSignedIn() && resource.data.userId == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isValidId(cardId) && isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow update: if isValidId(cardId) && isSignedIn() && resource.data.userId == request.auth.uid && request.resource.data.userId == request.auth.uid;
+    }
+
+    // Quizzes Collection
+    match /quizzes/{quizId} {
+      allow get, delete: if isValidId(quizId) && isSignedIn() && resource.data.userId == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isValidId(quizId) && isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow update: if isValidId(quizId) && isSignedIn() && resource.data.userId == request.auth.uid && request.resource.data.userId == request.auth.uid;
+    }
+
+    // Quiz Attempts Collection
+    match /quiz_attempts/{attemptId} {
+      allow get, delete: if isValidId(attemptId) && isSignedIn() && resource.data.userId == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isValidId(attemptId) && isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow update: if isValidId(attemptId) && isSignedIn() && resource.data.userId == request.auth.uid && request.resource.data.userId == request.auth.uid;
+    }
+
+    // Planner Events Collection
+    match /planner_events/{eventId} {
+      allow get, delete: if isValidId(eventId) && isSignedIn() && resource.data.userId == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isValidId(eventId) && isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow update: if isValidId(eventId) && isSignedIn() && resource.data.userId == request.auth.uid && request.resource.data.userId == request.auth.uid;
+    }
+
+    // Study Groups Collection
+    match /study_groups/{groupId} {
+      allow get: if isValidId(groupId) && isSignedIn();
+      allow list: if isSignedIn();
+      allow create: if isValidId(groupId) && isSignedIn() && request.resource.data.ownerId == request.auth.uid;
+      allow update, delete: if isValidId(groupId) && isSignedIn() && resource.data.ownerId == request.auth.uid;
+
+      // Group Members subcollection
+      match /members/{memberId} {
+        allow get, list: if isValidId(groupId) && isSignedIn();
+        allow create: if isValidId(groupId) && isValidId(memberId) && isSignedIn() && request.resource.data.userId == request.auth.uid;
+        allow delete: if isValidId(groupId) && isValidId(memberId) && isSignedIn() && (resource.data.userId == request.auth.uid || get(/databases/$(database)/documents/study_groups/$(groupId)).data.ownerId == request.auth.uid);
+      }
+    }
+  }
+}

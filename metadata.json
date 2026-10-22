@@ -1,0 +1,6 @@
+{
+  "name": "Study Lab",
+  "description": "Your personal academic workspace — AI-powered study platform with lecture processing, tutoring, smart flashcards, quizzes, and study planner.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,255 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User profile with language and study streak info",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "language": { "type": "string", "enum": ["en", "ar"] },
+        "studyStreak": { "type": "number" },
+        "lastActiveDate": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["userId", "email", "language"]
+    },
+    "Course": {
+      "title": "Course",
+      "description": "Academic course or subject",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "name": { "type": "string", "maxLength": 100 },
+        "code": { "type": "string", "maxLength": 30 },
+        "description": { "type": "string", "maxLength": 500 },
+        "color": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["userId", "name"]
+    },
+    "Lecture": {
+      "title": "Lecture",
+      "description": "Lecture document and extracted content",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "courseId": { "type": "string" },
+        "title": { "type": "string", "maxLength": 150 },
+        "fileName": { "type": "string" },
+        "fileType": { "type": "string" },
+        "fileSize": { "type": "number" },
+        "extractedText": { "type": "string" },
+        "notes": { "type": "string" },
+        "annotations": { "type": "string" },
+        "status": { "type": "string", "enum": ["processing", "ready", "error"] },
+        "errorMessage": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["userId", "courseId", "title", "status"]
+    },
+    "TutorConversation": {
+      "title": "TutorConversation",
+      "description": "AI tutor conversation session",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "courseId": { "type": "string" },
+        "lectureId": { "type": "string" },
+        "title": { "type": "string", "maxLength": 120 },
+        "mode": { "type": "string", "enum": ["lecture", "general"] },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["userId", "title", "mode"]
+    },
+    "TutorMessage": {
+      "title": "TutorMessage",
+      "description": "Message in an AI tutor conversation",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "conversationId": { "type": "string" },
+        "role": { "type": "string", "enum": ["user", "model"] },
+        "content": { "type": "string" },
+        "sourceReferences": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["userId", "conversationId", "role", "content"]
+    },
+    "FlashcardDeck": {
+      "title": "FlashcardDeck",
+      "description": "A deck of flashcards for a course or lecture",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "courseId": { "type": "string" },
+        "lectureId": { "type": "string" },
+        "title": { "type": "string", "maxLength": 120 },
+        "description": { "type": "string" },
+        "cardCount": { "type": "number" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["userId", "title"]
+    },
+    "Flashcard": {
+      "title": "Flashcard",
+      "description": "Individual flashcard with spaced repetition data",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "deckId": { "type": "string" },
+        "front": { "type": "string" },
+        "back": { "type": "string" },
+        "difficulty": { "type": "string", "enum": ["easy", "medium", "hard"] },
+        "sourceReference": { "type": "string" },
+        "interval": { "type": "number" },
+        "repetition": { "type": "number" },
+        "easeFactor": { "type": "number" },
+        "dueDate": { "type": "string" },
+        "lastReviewed": { "type": "string" },
+        "state": { "type": "string", "enum": ["new", "learning", "review", "mastered"] },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["userId", "deckId", "front", "back"]
+    },
+    "Quiz": {
+      "title": "Quiz",
+      "description": "Generated or custom quiz with questions",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "courseId": { "type": "string" },
+        "lectureId": { "type": "string" },
+        "title": { "type": "string", "maxLength": 150 },
+        "difficulty": { "type": "string", "enum": ["easy", "medium", "hard"] },
+        "timeLimitMinutes": { "type": "number" },
+        "questionCount": { "type": "number" },
+        "questions": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["userId", "title"]
+    },
+    "QuizAttempt": {
+      "title": "QuizAttempt",
+      "description": "Results and answers from a student's quiz attempt",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "quizId": { "type": "string" },
+        "score": { "type": "number" },
+        "totalQuestions": { "type": "number" },
+        "percentage": { "type": "number" },
+        "timeTakenSeconds": { "type": "number" },
+        "answers": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["userId", "quizId", "score", "totalQuestions"]
+    },
+    "PlannerEvent": {
+      "title": "PlannerEvent",
+      "description": "Study task, assignment, exam, or study session",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "courseId": { "type": "string" },
+        "title": { "type": "string", "maxLength": 150 },
+        "type": { "type": "string", "enum": ["task", "assignment", "session", "exam", "other"] },
+        "date": { "type": "string" },
+        "startTime": { "type": "string" },
+        "endTime": { "type": "string" },
+        "description": { "type": "string" },
+        "priority": { "type": "string", "enum": ["low", "medium", "high"] },
+        "completed": { "type": "boolean" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["userId", "title", "type", "date", "completed"]
+    },
+    "StudyGroup": {
+      "title": "StudyGroup",
+      "description": "Student collaborative study group",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "maxLength": 100 },
+        "description": { "type": "string", "maxLength": 500 },
+        "ownerId": { "type": "string" },
+        "joinCode": { "type": "string", "maxLength": 20 },
+        "memberCount": { "type": "number" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["name", "ownerId", "joinCode"]
+    },
+    "GroupMember": {
+      "title": "GroupMember",
+      "description": "Membership in a study group",
+      "type": "object",
+      "properties": {
+        "groupId": { "type": "string" },
+        "userId": { "type": "string" },
+        "role": { "type": "string", "enum": ["owner", "member"] },
+        "displayName": { "type": "string" },
+        "joinedAt": { "type": "string" }
+      },
+      "required": ["groupId", "userId", "role"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "User profile with language and study stats"
+    },
+    "/courses/{courseId}": {
+      "schema": "Course",
+      "description": "User's academic courses"
+    },
+    "/lectures/{lectureId}": {
+      "schema": "Lecture",
+      "description": "User's lecture documents and notes"
+    },
+    "/tutor_conversations/{conversationId}": {
+      "schema": "TutorConversation",
+      "description": "AI Tutor conversations"
+    },
+    "/tutor_conversations/{conversationId}/messages/{messageId}": {
+      "schema": "TutorMessage",
+      "description": "AI Tutor messages in a conversation"
+    },
+    "/flashcard_decks/{deckId}": {
+      "schema": "FlashcardDeck",
+      "description": "User's flashcard decks"
+    },
+    "/flashcards/{cardId}": {
+      "schema": "Flashcard",
+      "description": "Flashcard items"
+    },
+    "/quizzes/{quizId}": {
+      "schema": "Quiz",
+      "description": "User's generated quizzes"
+    },
+    "/quiz_attempts/{attemptId}": {
+      "schema": "QuizAttempt",
+      "description": "Quiz results and student answers"
+    },
+    "/planner_events/{eventId}": {
+      "schema": "PlannerEvent",
+      "description": "Tasks, exams, and study sessions"
+    },
+    "/study_groups/{groupId}": {
+      "schema": "StudyGroup",
+      "description": "Study groups"
+    },
+    "/study_groups/{groupId}/members/{memberId}": {
+      "schema": "GroupMember",
+      "description": "Study group memberships"
+    }
+  }
+}
