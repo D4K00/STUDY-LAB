@@ -232,9 +232,44 @@ export const QuizzesView: React.FC<QuizzesViewProps> = ({
         }),
       });
 
-      const data = await res.json();
-      if (!res.ok || !data.success || !data.questions || !Array.isArray(data.questions) || data.questions.length === 0) {
-        throw new Error(data.error || 'Could not generate valid quiz questions. Check lecture content and try again.');
+      // Read the response as text first: proxies/hosting platforms may return
+      // plain text or an HTML error page instead of JSON (which makes res.json()
+      // throw an unhelpful "Unexpected token" error).
+      const responseText = await res.text();
+      const contentType = res.headers.get('content-type') || '';
+      let data: any = null;
+
+      if (responseText.trim()) {
+        try {
+          data = JSON.parse(responseText);
+        } catch {
+          const preview = responseText.replace(/\\s+/g, ' ').trim().slice(0, 180);
+          if (!res.ok) {
+            throw new Error(
+              `Quiz service returned HTTP ${res.status} with a non-JSON response. ` +
+              (res.status === 404
+                ? 'The /api/ai/quiz endpoint was not found in this deployment. Check the server/API routing configuration.'
+                : 'Check the server logs and API configuration.') +
+              ` Response: ${preview}`
+            );
+          }
+          throw new Error(
+            `Quiz service returned an invalid response instead of JSON${contentType ? ` (${contentType})` : ''}. ` +
+            `Check that /api/ai/quiz is routed to the backend, not the website page. Response: ${preview}`
+          );
+        }
+      } else if (!res.ok) {
+        throw new Error(`Quiz service failed with HTTP ${res.status} and returned an empty response.`);
+      } else {
+        throw new Error('Quiz service returned an empty response. Please try again later.');
+      }
+
+      if (!res.ok || !data?.success || !Array.isArray(data?.questions) || data.questions.length === 0) {
+        throw new Error(
+          data?.error ||
+          data?.message ||
+          `Could not generate valid quiz questions (HTTP ${res.status}). Check lecture content and API availability.`
+        );
       }
 
       const quizDoc = {
