@@ -9,6 +9,10 @@ import {
   Trash2,
   Save,
   Palette,
+  ChevronLeft,
+  ChevronRight,
+  Plus,
+  Layers,
 } from 'lucide-react';
 
 interface Point {
@@ -23,6 +27,8 @@ interface Stroke {
   points: Point[];
 }
 
+type PageAnnotations = Record<number, Stroke[]>;
+
 interface StylusCanvasProps {
   initialAnnotations?: string;
   onSave: (annotationsJson: string) => void;
@@ -32,23 +38,32 @@ export const StylusCanvas: React.FC<StylusCanvasProps> = ({ initialAnnotations, 
   const { t } = useAuth();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
+  const [activePage, setActivePage] = useState<number>(1);
+  const [totalPages, setTotalPages] = useState<number>(1);
+  const [pageStrokes, setPageStrokes] = useState<PageAnnotations>({ 1: [] });
+  const [pageRedoStacks, setPageRedoStacks] = useState<Record<number, Stroke[]>>({ 1: [] });
+
   const [tool, setTool] = useState<'pen' | 'highlighter' | 'eraser'>('pen');
   const [color, setColor] = useState<string>('#1e293b');
   const [strokeWidth, setStrokeWidth] = useState<number>(3);
-  const [strokes, setStrokes] = useState<Stroke[]>([]);
-  const [redoStack, setRedoStack] = useState<Stroke[]>([]);
   const [isDrawing, setIsDrawing] = useState<boolean>(false);
   const [savedStatus, setSavedStatus] = useState<boolean>(false);
 
   const colors = ['#1e293b', '#2563eb', '#dc2626', '#16a34a', '#ca8a04', '#9333ea'];
 
-  // Load initial annotations
+  // Load initial annotations (handles both page-specific map and legacy flat array)
   useEffect(() => {
     if (initialAnnotations) {
       try {
         const parsed = JSON.parse(initialAnnotations);
         if (Array.isArray(parsed)) {
-          setStrokes(parsed);
+          setPageStrokes({ 1: parsed });
+          setTotalPages(1);
+        } else if (parsed && typeof parsed === 'object') {
+          setPageStrokes(parsed);
+          const pageNumbers = Object.keys(parsed).map(Number).filter((n) => !isNaN(n) && n > 0);
+          const maxP = Math.max(1, ...pageNumbers);
+          setTotalPages(maxP);
         }
       } catch (err) {
         console.warn('Could not parse initial annotations', err);
@@ -56,7 +71,10 @@ export const StylusCanvas: React.FC<StylusCanvasProps> = ({ initialAnnotations, 
     }
   }, [initialAnnotations]);
 
-  // Redraw canvas whenever strokes change
+  const currentStrokes = pageStrokes[activePage] || [];
+  const currentRedo = pageRedoStacks[activePage] || [];
+
+  // Redraw canvas whenever current page strokes change
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -65,7 +83,7 @@ export const StylusCanvas: React.FC<StylusCanvasProps> = ({ initialAnnotations, 
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    for (const stroke of strokes) {
+    for (const stroke of currentStrokes) {
       if (stroke.points.length < 2) continue;
 
       ctx.beginPath();
@@ -80,14 +98,14 @@ export const StylusCanvas: React.FC<StylusCanvasProps> = ({ initialAnnotations, 
 
       if (stroke.tool === 'eraser') {
         ctx.globalCompositeOperation = 'destination-out';
-        ctx.lineWidth = stroke.width * 4;
+        ctx.lineWidth = stroke.width * 5;
         ctx.strokeStyle = 'rgba(0,0,0,1)';
       } else if (stroke.tool === 'highlighter') {
         ctx.globalCompositeOperation = 'source-over';
         ctx.strokeStyle = stroke.color.startsWith('#')
           ? `${stroke.color}40` // 25% opacity
           : 'rgba(250, 204, 21, 0.4)';
-        ctx.lineWidth = stroke.width * 3;
+        ctx.lineWidth = stroke.width * 3.5;
       } else {
         ctx.globalCompositeOperation = 'source-over';
         ctx.strokeStyle = stroke.color;
@@ -98,7 +116,7 @@ export const StylusCanvas: React.FC<StylusCanvasProps> = ({ initialAnnotations, 
     }
 
     ctx.globalCompositeOperation = 'source-over';
-  }, [strokes]);
+  }, [currentStrokes, activePage]);
 
   // Adjust canvas resolution to parent size on resize
   useEffect(() => {
@@ -106,11 +124,11 @@ export const StylusCanvas: React.FC<StylusCanvasProps> = ({ initialAnnotations, 
       const canvas = canvasRef.current;
       if (!canvas || !canvas.parentElement) return;
       const rect = canvas.parentElement.getBoundingClientRect();
-      if (canvas.width !== rect.width || canvas.height !== 600) {
+      if (canvas.width !== rect.width || canvas.height !== 650) {
         canvas.width = rect.width;
-        canvas.height = 600;
+        canvas.height = 650;
         // Trigger redraw
-        setStrokes((prev) => [...prev]);
+        setPageStrokes((prev) => ({ ...prev }));
       }
     };
 
@@ -130,7 +148,6 @@ export const StylusCanvas: React.FC<StylusCanvasProps> = ({ initialAnnotations, 
   };
 
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    // Enable stylus or finger drawing
     canvasRef.current?.setPointerCapture(e.pointerId);
     setIsDrawing(true);
     const pt = getCanvasPoint(e);
@@ -142,25 +159,36 @@ export const StylusCanvas: React.FC<StylusCanvasProps> = ({ initialAnnotations, 
       points: [pt],
     };
 
-    setStrokes((prev) => [...prev, newStroke]);
-    setRedoStack([]);
+    setPageStrokes((prev) => ({
+      ...prev,
+      [activePage]: [...(prev[activePage] || []), newStroke],
+    }));
+
+    setPageRedoStacks((prev) => ({
+      ...prev,
+      [activePage]: [],
+    }));
   };
 
   const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (!isDrawing) return;
     const pt = getCanvasPoint(e);
 
-    setStrokes((prev) => {
-      if (prev.length === 0) return prev;
-      const lastIndex = prev.length - 1;
-      const lastStroke = prev[lastIndex];
+    setPageStrokes((prev) => {
+      const strokes = prev[activePage] || [];
+      if (strokes.length === 0) return prev;
+      const lastIndex = strokes.length - 1;
+      const lastStroke = strokes[lastIndex];
       const updatedStroke = {
         ...lastStroke,
         points: [...lastStroke.points, pt],
       };
-      const copy = [...prev];
+      const copy = [...strokes];
       copy[lastIndex] = updatedStroke;
-      return copy;
+      return {
+        ...prev,
+        [activePage]: copy,
+      };
     });
   };
 
@@ -174,37 +202,93 @@ export const StylusCanvas: React.FC<StylusCanvasProps> = ({ initialAnnotations, 
   };
 
   const handleUndo = () => {
-    if (strokes.length === 0) return;
-    const last = strokes[strokes.length - 1];
-    setRedoStack((prev) => [...prev, last]);
-    setStrokes((prev) => prev.slice(0, prev.length - 1));
+    if (currentStrokes.length === 0) return;
+    const last = currentStrokes[currentStrokes.length - 1];
+    setPageRedoStacks((prev) => ({
+      ...prev,
+      [activePage]: [...(prev[activePage] || []), last],
+    }));
+    setPageStrokes((prev) => ({
+      ...prev,
+      [activePage]: currentStrokes.slice(0, currentStrokes.length - 1),
+    }));
   };
 
   const handleRedo = () => {
-    if (redoStack.length === 0) return;
-    const next = redoStack[redoStack.length - 1];
-    setRedoStack((prev) => prev.slice(0, prev.length - 1));
-    setStrokes((prev) => [...prev, next]);
+    if (currentRedo.length === 0) return;
+    const next = currentRedo[currentRedo.length - 1];
+    setPageRedoStacks((prev) => ({
+      ...prev,
+      [activePage]: currentRedo.slice(0, currentRedo.length - 1),
+    }));
+    setPageStrokes((prev) => ({
+      ...prev,
+      [activePage]: [...currentStrokes, next],
+    }));
   };
 
   const handleClear = () => {
-    if (window.confirm(t.confirmDelete)) {
-      setStrokes([]);
-      setRedoStack([]);
+    if (window.confirm(`Clear annotations on page ${activePage}?`)) {
+      setPageStrokes((prev) => ({
+        ...prev,
+        [activePage]: [],
+      }));
+      setPageRedoStacks((prev) => ({
+        ...prev,
+        [activePage]: [],
+      }));
     }
   };
 
   const handleSave = () => {
-    const json = JSON.stringify(strokes);
+    const json = JSON.stringify(pageStrokes);
     onSave(json);
     setSavedStatus(true);
     setTimeout(() => setSavedStatus(false), 2000);
+  };
+
+  const handleAddPage = () => {
+    const newPageNum = totalPages + 1;
+    setTotalPages(newPageNum);
+    setActivePage(newPageNum);
+    setPageStrokes((prev) => ({ ...prev, [newPageNum]: [] }));
   };
 
   return (
     <div className="flex flex-col bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
       {/* Toolbar */}
       <div className="flex flex-wrap items-center justify-between gap-3 p-3 bg-slate-50 border-b border-slate-200 text-xs">
+        {/* Page navigation */}
+        <div className="flex items-center gap-1.5 bg-white p-1 rounded-lg border border-slate-200">
+          <button
+            disabled={activePage <= 1}
+            onClick={() => setActivePage((p) => Math.max(1, p - 1))}
+            className="p-1 text-slate-600 hover:text-slate-900 disabled:opacity-30 rounded"
+            title="Previous Page"
+          >
+            <ChevronLeft className="w-4 h-4" />
+          </button>
+          <span className="font-semibold text-slate-800 px-1">
+            Page {activePage} / {totalPages}
+          </span>
+          <button
+            disabled={activePage >= totalPages}
+            onClick={() => setActivePage((p) => Math.min(totalPages, p + 1))}
+            className="p-1 text-slate-600 hover:text-slate-900 disabled:opacity-30 rounded"
+            title="Next Page"
+          >
+            <ChevronRight className="w-4 h-4" />
+          </button>
+          <button
+            onClick={handleAddPage}
+            className="flex items-center gap-1 px-2 py-0.5 ml-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded text-[11px] font-medium"
+            title="Add Whiteboard Page"
+          >
+            <Plus className="w-3 h-3" />
+            <span>New Page</span>
+          </button>
+        </div>
+
         {/* Tool selector */}
         <div className="flex items-center gap-1 bg-white p-1 rounded-lg border border-slate-200">
           <button
@@ -258,7 +342,7 @@ export const StylusCanvas: React.FC<StylusCanvasProps> = ({ initialAnnotations, 
           <input
             type="range"
             min="1"
-            max="12"
+            max="16"
             value={strokeWidth}
             onChange={(e) => setStrokeWidth(Number(e.target.value))}
             className="w-16 h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer"
@@ -269,7 +353,7 @@ export const StylusCanvas: React.FC<StylusCanvasProps> = ({ initialAnnotations, 
         <div className="flex items-center gap-1 ml-auto">
           <button
             onClick={handleUndo}
-            disabled={strokes.length === 0}
+            disabled={currentStrokes.length === 0}
             title={t.undo}
             className="p-1.5 text-slate-600 hover:text-slate-900 disabled:opacity-30 rounded"
           >
@@ -277,7 +361,7 @@ export const StylusCanvas: React.FC<StylusCanvasProps> = ({ initialAnnotations, 
           </button>
           <button
             onClick={handleRedo}
-            disabled={redoStack.length === 0}
+            disabled={currentRedo.length === 0}
             title={t.redo}
             className="p-1.5 text-slate-600 hover:text-slate-900 disabled:opacity-30 rounded"
           >
@@ -285,8 +369,9 @@ export const StylusCanvas: React.FC<StylusCanvasProps> = ({ initialAnnotations, 
           </button>
           <button
             onClick={handleClear}
+            disabled={currentStrokes.length === 0}
             title={t.clearCanvas}
-            className="p-1.5 text-slate-600 hover:text-red-600 rounded"
+            className="p-1.5 text-slate-600 hover:text-red-600 disabled:opacity-30 rounded"
           >
             <Trash2 className="w-4 h-4" />
           </button>
@@ -301,7 +386,7 @@ export const StylusCanvas: React.FC<StylusCanvasProps> = ({ initialAnnotations, 
       </div>
 
       {/* Drawing Area with touch-action: none for Apple Pencil / Stylus */}
-      <div className="relative w-full h-[600px] bg-white cursor-crosshair overflow-hidden touch-none">
+      <div className="relative w-full h-[650px] bg-white cursor-crosshair overflow-hidden touch-none">
         <canvas
           ref={canvasRef}
           onPointerDown={handlePointerDown}
@@ -310,9 +395,9 @@ export const StylusCanvas: React.FC<StylusCanvasProps> = ({ initialAnnotations, 
           onPointerCancel={handlePointerUp}
           className="absolute inset-0 w-full h-full"
         />
-        {strokes.length === 0 && (
+        {currentStrokes.length === 0 && (
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none text-slate-300 text-xs">
-            {t.stylusTab} — Use Apple Pencil, stylus, or mouse to sketch & annotate formulas
+            {t.stylusTab} — Page {activePage}: Use Apple Pencil, stylus, or mouse to sketch & annotate formulas
           </div>
         )}
       </div>

@@ -14,6 +14,8 @@ import {
 import { db } from '../../lib/firebase.ts';
 import { Course, Lecture } from '../../types/index.ts';
 import { StylusCanvas } from './StylusCanvas.tsx';
+import { PDFViewer } from './PDFViewer.tsx';
+import { saveLecturePDF } from '../../lib/pdfStorage.ts';
 import {
   BookOpen,
   Plus,
@@ -22,6 +24,7 @@ import {
   Search,
   Trash2,
   Edit2,
+  PenTool,
   Sparkles,
   Bot,
   Layers,
@@ -235,6 +238,12 @@ export const LecturesView: React.FC<LecturesViewProps> = ({ onNavigate }) => {
         };
 
         const docRef = await addDoc(collection(db, 'lectures'), lectureDoc);
+        try {
+          const buffer = await file.arrayBuffer();
+          await saveLecturePDF(docRef.id, buffer);
+        } catch (dbErr) {
+          console.warn('Could not cache PDF in IndexedDB:', dbErr);
+        }
         const newLecture: Lecture = { id: docRef.id, ...lectureDoc };
         setLectures((prev) => [newLecture, ...prev]);
       } catch (err: any) {
@@ -409,72 +418,84 @@ export const LecturesView: React.FC<LecturesViewProps> = ({ onNavigate }) => {
           <div className="flex items-center gap-2 border-b border-slate-200 px-2">
             <button
               onClick={() => setActiveLectureTab('document')}
-              className={`pb-3 px-3 text-xs font-semibold border-b-2 transition ${
+              className={`pb-3 px-3 text-xs font-semibold border-b-2 transition flex items-center gap-1.5 ${
                 activeLectureTab === 'document'
                   ? 'border-slate-900 text-slate-900'
                   : 'border-transparent text-slate-500 hover:text-slate-800'
               }`}
             >
-              {t.documentTab}
+              <FileText className="w-3.5 h-3.5" />
+              <span>PDF Slides & Annotations</span>
             </button>
             <button
               onClick={() => setActiveLectureTab('notes')}
-              className={`pb-3 px-3 text-xs font-semibold border-b-2 transition ${
+              className={`pb-3 px-3 text-xs font-semibold border-b-2 transition flex items-center gap-1.5 ${
                 activeLectureTab === 'notes'
                   ? 'border-slate-900 text-slate-900'
                   : 'border-transparent text-slate-500 hover:text-slate-800'
               }`}
             >
-              {t.notesTab}
+              <Edit2 className="w-3.5 h-3.5" />
+              <span>{t.notesTab} & Transcript</span>
             </button>
             <button
               onClick={() => setActiveLectureTab('stylus')}
-              className={`pb-3 px-3 text-xs font-semibold border-b-2 transition ${
+              className={`pb-3 px-3 text-xs font-semibold border-b-2 transition flex items-center gap-1.5 ${
                 activeLectureTab === 'stylus'
                   ? 'border-slate-900 text-slate-900'
                   : 'border-transparent text-slate-500 hover:text-slate-800'
               }`}
             >
-              {t.stylusTab}
+              <PenTool className="w-3.5 h-3.5" />
+              <span>Whiteboard Canvas</span>
             </button>
           </div>
 
-          {/* Tab 1: Extracted Text Document Viewer */}
+          {/* Tab 1: Real PDF Viewer with Page-Specific Annotations */}
           {activeLectureTab === 'document' && (
-            <div className="bg-white p-6 rounded-2xl border border-slate-200/80 shadow-xs space-y-4">
-              <div className="flex items-center justify-between text-xs text-slate-500 border-b border-slate-100 pb-3">
-                <span className="font-medium">
-                  {selectedLecture.fileName} ({Math.round(selectedLecture.fileSize / 1024)} KB)
-                </span>
-                <span className="bg-slate-100 px-2 py-0.5 rounded text-[11px] font-semibold text-slate-600">
-                  {selectedLecture.fileType.toUpperCase()}
-                </span>
-              </div>
-              <div className="prose max-w-none text-sm text-slate-800 leading-relaxed whitespace-pre-wrap font-sans selection:bg-slate-200">
-                {selectedLecture.extractedText || 'No extracted text found in this file.'}
-              </div>
-            </div>
+            <PDFViewer
+              lecture={selectedLecture}
+              courseName={courses.find((c) => c.id === selectedLecture.courseId)?.name}
+              onSaveAnnotations={handleSaveAnnotations}
+              onSwitchToNotes={() => setActiveLectureTab('notes')}
+            />
           )}
 
-          {/* Tab 2: Notes Editor */}
+          {/* Tab 2: Notes Editor & Extracted Transcript */}
           {activeLectureTab === 'notes' && (
-            <div className="bg-white p-6 rounded-2xl border border-slate-200/80 shadow-xs space-y-4">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold text-slate-500">{t.notesTab}</span>
-                <button
-                  onClick={handleSaveNotes}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-xs font-medium transition"
-                >
-                  <Save className="w-3.5 h-3.5" />
-                  <span>{notesSavedNotice ? t.notesSaved : t.saveNotes}</span>
-                </button>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              {/* Personal Notes */}
+              <div className="bg-white p-6 rounded-2xl border border-slate-200/80 shadow-xs space-y-4">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-slate-700">{t.notesTab}</span>
+                  <button
+                    onClick={handleSaveNotes}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-xs font-medium transition"
+                  >
+                    <Save className="w-3.5 h-3.5" />
+                    <span>{notesSavedNotice ? t.notesSaved : t.saveNotes}</span>
+                  </button>
+                </div>
+                <textarea
+                  value={notesContent}
+                  onChange={(e) => setNotesContent(e.target.value)}
+                  placeholder="Write your personal lecture notes, formulas, questions to ask the professor..."
+                  className="w-full h-96 p-4 text-sm border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-slate-800 resize-y font-sans leading-relaxed"
+                />
               </div>
-              <textarea
-                value={notesContent}
-                onChange={(e) => setNotesContent(e.target.value)}
-                placeholder="Write your personal lecture notes, formulas, questions to ask the professor..."
-                className="w-full h-96 p-4 text-sm border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-slate-800 resize-y font-sans leading-relaxed"
-              />
+
+              {/* Extracted Document Text */}
+              <div className="bg-white p-6 rounded-2xl border border-slate-200/80 shadow-xs space-y-4">
+                <div className="flex items-center justify-between text-xs text-slate-500 border-b border-slate-100 pb-3">
+                  <span className="font-semibold text-slate-700">Extracted Lecture Transcript</span>
+                  <span className="bg-slate-100 px-2 py-0.5 rounded text-[11px] font-semibold text-slate-600">
+                    {selectedLecture.fileType.toUpperCase()}
+                  </span>
+                </div>
+                <div className="h-96 overflow-y-auto pr-2 text-sm text-slate-800 leading-relaxed whitespace-pre-wrap font-sans selection:bg-slate-200">
+                  {selectedLecture.extractedText || 'No extracted text found in this file.'}
+                </div>
+              </div>
             </div>
           )}
 
