@@ -162,11 +162,15 @@ app.get('/api/health', (req, res) => {
 
 // Document extraction endpoint
 app.post('/api/extract-text', async (req, res) => {
+  const fileName = req.body?.fileName || 'unknown';
+  const fileType = req.body?.fileType || 'unknown';
+  console.log(`[/api/extract-text] Request received for fileName: "${fileName}", fileType: "${fileType}"`);
+
   try {
-    const { fileName, fileType, fileBase64, textContent } = req.body;
+    const { fileBase64, textContent } = req.body;
 
     // 1. Plain text file
-    if (fileType === 'text/plain' || fileName?.endsWith('.txt')) {
+    if (fileType === 'text/plain' || fileName.endsWith('.txt')) {
       const text = textContent || (fileBase64 ? Buffer.from(fileBase64, 'base64').toString('utf-8') : '');
       return res.json({ success: true, text });
     }
@@ -174,7 +178,7 @@ app.post('/api/extract-text', async (req, res) => {
     // 2. Word Document (.docx)
     if (
       fileType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
-      fileName?.endsWith('.docx')
+      fileName.endsWith('.docx')
     ) {
       if (fileBase64) {
         const buffer = Buffer.from(fileBase64, 'base64');
@@ -186,40 +190,51 @@ app.post('/api/extract-text', async (req, res) => {
     // 3. PDF, PPTX, Images (OCR and multimodal extraction using Gemini)
     if (fileBase64) {
       let mimeType = fileType || 'application/pdf';
-      if (fileName?.endsWith('.pdf')) mimeType = 'application/pdf';
-      else if (fileName?.endsWith('.pptx')) mimeType = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
-      else if (fileName?.endsWith('.png')) mimeType = 'image/png';
-      else if (fileName?.endsWith('.jpg') || fileName?.endsWith('.jpeg')) mimeType = 'image/jpeg';
+      if (fileName.endsWith('.pdf')) mimeType = 'application/pdf';
+      else if (fileName.endsWith('.pptx')) mimeType = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+      else if (fileName.endsWith('.png')) mimeType = 'image/png';
+      else if (fileName.endsWith('.jpg') || fileName.endsWith('.jpeg')) mimeType = 'image/jpeg';
 
       const prompt = `Extract all textual content, headings, outlines, key formulas, lecture slides, and notes from this academic document.
 Preserve the natural hierarchy: headings, subheadings, paragraphs, bullet points, and slide/page references where available.
 Output the full extracted readable text directly without commentary or preamble.`;
 
-      const response = await callGemini([
-        {
-          role: 'user',
-          parts: [
-            {
-              inlineData: {
-                mimeType,
-                data: fileBase64,
+      try {
+        const response = await callGemini([
+          {
+            role: 'user',
+            parts: [
+              {
+                inlineData: {
+                  mimeType,
+                  data: fileBase64,
+                },
               },
-            },
-            { text: prompt },
-          ],
-        },
-      ]);
+              { text: prompt },
+            ],
+          },
+        ]);
 
-      const extractedText = response.text || '';
-      return res.json({ success: true, text: extractedText });
+        const extractedText = response.text || '';
+        return res.json({ success: true, text: extractedText });
+      } catch (geminiErr: any) {
+        console.warn(`[/api/extract-text] Multimodal extraction note for ${fileName}:`, geminiErr?.message);
+        return res.json({
+          success: false,
+          error: geminiErr?.message || 'Multimodal extraction could not process document',
+          text: '',
+        });
+      }
     }
 
-    return res.status(400).json({ error: 'No readable file data provided' });
+    return res.status(400).json({ success: false, error: 'No readable file data provided', text: '' });
   } catch (err: any) {
-    console.error('Text extraction error:', err);
-    res.status(500).json({
+    console.error('[/api/extract-text] Text extraction error:', err?.message || err);
+    res.status(200).json({
+      success: false,
       error: 'Failed to extract text from document',
-      details: err.message || 'Unknown processing error',
+      details: err?.message || 'Unknown processing error',
+      text: '',
     });
   }
 });

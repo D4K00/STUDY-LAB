@@ -16,6 +16,7 @@ import { Course, Lecture } from '../../types/index.ts';
 import { StylusCanvas } from './StylusCanvas.tsx';
 import { PDFViewer } from './PDFViewer.tsx';
 import { saveLecturePDF } from '../../lib/pdfStorage.ts';
+import * as pdfjsLib from 'pdfjs-dist';
 import {
   BookOpen,
   Plus,
@@ -38,6 +39,56 @@ import {
   X,
   ExternalLink,
 } from 'lucide-react';
+
+// Configure pdfjs worker to local public static asset
+if (typeof window !== 'undefined' && !pdfjsLib.GlobalWorkerOptions.workerSrc) {
+  pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.js';
+}
+
+/**
+ * Safely extracts authentic text from a PDF ArrayBuffer using client-side pdfjs.
+ * This extracts genuine page-by-page text without making slow or rate-limited external calls.
+ */
+async function extractTextFromPDFBuffer(buffer: ArrayBuffer): Promise<string> {
+  try {
+    const loadingTask = pdfjsLib.getDocument({
+      data: buffer.slice(0),
+      cMapUrl: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/cmaps/',
+      cMapPacked: true,
+    });
+    const pdf = await loadingTask.promise;
+    const pageTexts: string[] = [];
+    for (let p = 1; p <= pdf.numPages; p++) {
+      const page = await pdf.getPage(p);
+      const content = await page.getTextContent();
+      const strings = content.items
+        .map((item: any) => ('str' in item ? item.str : ''))
+        .filter(Boolean);
+      const pageText = strings.join(' ').replace(/\s+/g, ' ').trim();
+      if (pageText) {
+        pageTexts.push(`--- Page ${p} ---\n${pageText}`);
+      }
+    }
+    return pageTexts.join('\n\n').trim();
+  } catch (err) {
+    console.warn('[PDF] Client-side text extraction note:', err);
+    return '';
+  }
+}
+
+/**
+ * Safely converts an ArrayBuffer to a base64 string in chunks to prevent call-stack overflows.
+ */
+function bufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  const chunkSize = 32768;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const chunk = bytes.subarray(i, i + chunkSize);
+    binary += String.fromCharCode.apply(null, chunk as unknown as number[]);
+  }
+  return window.btoa(binary);
+}
 
 interface LecturesViewProps {
   onNavigate: (tab: ActiveTab, context?: { courseId?: string; lectureId?: string }) => void;
@@ -65,6 +116,8 @@ export const LecturesView: React.FC<LecturesViewProps> = ({ onNavigate }) => {
   const [uploadTargetCourseId, setUploadTargetCourseId] = useState<string>('');
   const [uploadingFiles, setUploadingFiles] = useState<boolean>(false);
   const [uploadStatusMsg, setUploadStatusMsg] = useState<string>('');
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [uploadSuccessMsg, setUploadSuccessMsg] = useState<string | null>(null);
 
   // AI Summary Modal
   const [summaryModalOpen, setSummaryModalOpen] = useState<boolean>(false);
@@ -78,6 +131,20 @@ export const LecturesView: React.FC<LecturesViewProps> = ({ onNavigate }) => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const colors = ['#2563eb', '#059669', '#d97706', '#dc2626', '#7c3aed', '#db2777'];
+
+  // Helper to open upload modal with correct target course
+  const handleOpenUploadModal = (courseIdOverride?: string) => {
+    if (courses.length === 0) {
+      setShowCourseModal(true);
+      return;
+    }
+    const target = courseIdOverride || (selectedCourseId !== 'all' ? selectedCourseId : uploadTargetCourseId || courses[0]?.id);
+    setUploadTargetCourseId(target);
+    setUploadError(null);
+    setUploadSuccessMsg(null);
+    setUploadStatusMsg('');
+    setShowUploadModal(true);
+  };
 
   // Fetch courses and lectures
   const fetchData = async () => {
@@ -167,67 +234,111 @@ export const LecturesView: React.FC<LecturesViewProps> = ({ onNavigate }) => {
   // File Upload and Text Extraction
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
-    if (!files || files.length === 0 || !currentUser) return;
+    if (!files || files.length === 0) return;
 
-    const courseId = uploadTargetCourseId || courses[0]?.id;
-    if (!courseId) {
-      alert('Please create a course before uploading lectures.');
+    if (!currentUser) {
+      setUploadError('You must be signed in to upload lectures.');
       return;
     }
 
+    const targetCourseId = uploadTargetCourseId || (selectedCourseId !== 'all' ? selectedCourseId : courses[0]?.id);
+    if (!targetCourseId) {
+      setUploadError('Please select or create a course before uploading lectures.');
+      return;
+    }
+
+    const targetCourse = courses.find((c) => c.id === targetCourseId);
     setUploadingFiles(true);
-    setUploadStatusMsg(t.processingFile);
+    setUploadError(null);
+    setUploadSuccessMsg(null);
+
+    let successfulUploads = 0;
+    let lastError: string | null = null;
 
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
       const title = file.name.replace(/\.[^/.]+$/, '');
-      const fileType = file.type || file.name.split('.').pop() || 'unknown';
+      const fileExt = file.name.split('.').pop()?.toLowerCase() || 'doc';
+
+      console.log(`[Upload] Processing "${file.name}" (${file.size} bytes) for course: "${targetCourse?.name || targetCourseId}"`);
+      setUploadStatusMsg(`Reading ${file.name}...`);
 
       try {
+        const fileBuffer = await file.arrayBuffer();
         let extractedText = '';
 
-        // Read as base64 or text
-        if (file.name.endsWith('.txt')) {
+        // 1. Text extraction
+        if (file.name.endsWith('.txt') || file.type === 'text/plain') {
+          setUploadStatusMsg(`Reading text file ${file.name}...`);
           extractedText = await file.text();
+        } else if (fileExt === 'pdf' || file.type === 'application/pdf') {
+          setUploadStatusMsg(`Extracting text from PDF: ${file.name}...`);
+          // High-fidelity client-side PDF extraction
+          try {
+            extractedText = await extractTextFromPDFBuffer(fileBuffer);
+          } catch (pdfErr) {
+            console.warn('[Upload] Client PDF text extraction note:', pdfErr);
+          }
+
+          // If PDF has no embedded text (e.g. scanned image), try server-side Gemini OCR if reasonable size (< 15MB)
+          if (!extractedText.trim() && file.size < 15 * 1024 * 1024) {
+            setUploadStatusMsg(`Processing scanned document with AI OCR...`);
+            try {
+              const base64 = bufferToBase64(fileBuffer);
+              const response = await fetch('/api/extract-text', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  fileName: file.name,
+                  fileType: 'application/pdf',
+                  fileBase64: base64,
+                }),
+              });
+
+              if (response.ok) {
+                const data = await response.json();
+                if (data.success && data.text) {
+                  extractedText = data.text;
+                }
+              }
+            } catch (ocrErr) {
+              console.warn('[Upload] Server OCR fallback note:', ocrErr);
+            }
+          }
         } else {
-          // Read base64
-          const base64 = await new Promise<string>((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = () => {
-              const res = reader.result as string;
-              const b64 = res.split(',')[1];
-              resolve(b64);
-            };
-            reader.onerror = reject;
-            reader.readAsDataURL(file);
-          });
+          // Word docx, pptx, images
+          setUploadStatusMsg(`Extracting text from ${file.name}...`);
+          try {
+            const base64 = bufferToBase64(fileBuffer);
+            const response = await fetch('/api/extract-text', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                fileName: file.name,
+                fileType: file.type,
+                fileBase64: base64,
+              }),
+            });
 
-          // Call backend extraction
-          const response = await fetch('/api/extract-text', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              fileName: file.name,
-              fileType: file.type,
-              fileBase64: base64,
-            }),
-          });
-
-          const data = await response.json();
-          if (data.success && data.text) {
-            extractedText = data.text;
-          } else {
-            extractedText = `Extracted notes from ${file.name}.`;
+            if (response.ok) {
+              const data = await response.json();
+              if (data.success && data.text) {
+                extractedText = data.text;
+              }
+            }
+          } catch (docErr) {
+            console.warn('[Upload] Server document extraction note:', docErr);
           }
         }
 
-        // Save lecture to Firestore
+        // 2. Save lecture record to Firestore
+        setUploadStatusMsg(`Saving lecture to ${targetCourse?.name || 'course'}...`);
         const lectureDoc = {
           userId: currentUser.uid,
-          courseId,
+          courseId: targetCourseId,
           title,
           fileName: file.name,
-          fileType: file.name.split('.').pop() || 'doc',
+          fileType: fileExt,
           fileSize: file.size,
           extractedText: extractedText.trim(),
           notes: '',
@@ -238,23 +349,47 @@ export const LecturesView: React.FC<LecturesViewProps> = ({ onNavigate }) => {
         };
 
         const docRef = await addDoc(collection(db, 'lectures'), lectureDoc);
+        console.log(`[Upload] Lecture persisted in Firestore with ID: ${docRef.id}`);
+
+        // 3. Store original document in IndexedDB
         try {
-          const buffer = await file.arrayBuffer();
-          await saveLecturePDF(docRef.id, buffer);
+          await saveLecturePDF(docRef.id, fileBuffer);
         } catch (dbErr) {
-          console.warn('Could not cache PDF in IndexedDB:', dbErr);
+          console.warn('[Upload] Could not cache PDF in IndexedDB:', dbErr);
         }
+
         const newLecture: Lecture = { id: docRef.id, ...lectureDoc };
         setLectures((prev) => [newLecture, ...prev]);
+        successfulUploads++;
       } catch (err: any) {
-        console.error('File upload error:', err);
+        console.error('[Upload] File upload error:', err);
+        lastError = err?.message || 'Unknown write failure';
       }
     }
 
     setUploadingFiles(false);
-    setShowUploadModal(false);
-    setUploadStatusMsg('');
-    if (fileInputRef.current) fileInputRef.current.value = '';
+
+    if (successfulUploads > 0) {
+      setUploadSuccessMsg(
+        successfulUploads === 1
+          ? 'Lecture uploaded successfully!'
+          : `Successfully uploaded ${successfulUploads} lectures!`
+      );
+      // Ensure the course where the lecture was uploaded is the active selected course
+      if (selectedCourseId !== targetCourseId) {
+        setSelectedCourseId(targetCourseId);
+      }
+      setTimeout(() => {
+        setShowUploadModal(false);
+        setUploadStatusMsg('');
+        setUploadSuccessMsg(null);
+        if (fileInputRef.current) fileInputRef.current.value = '';
+      }, 1000);
+    } else {
+      setUploadStatusMsg('');
+      setUploadError(lastError ? `Upload failed: ${lastError}` : 'Upload failed. Please check your file and connection.');
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
   };
 
   // Save Notes
@@ -565,13 +700,7 @@ export const LecturesView: React.FC<LecturesViewProps> = ({ onNavigate }) => {
                 <span>{t.newCourse}</span>
               </button>
               <button
-                onClick={() => {
-                  if (courses.length === 0) {
-                    setShowCourseModal(true);
-                  } else {
-                    setShowUploadModal(true);
-                  }
-                }}
+                onClick={() => handleOpenUploadModal()}
                 className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-900 text-white text-xs font-semibold hover:bg-slate-800 transition shadow-xs"
               >
                 <Upload className="w-4 h-4" />
@@ -598,7 +727,10 @@ export const LecturesView: React.FC<LecturesViewProps> = ({ onNavigate }) => {
                 return (
                   <div key={course.id} className="flex items-center shrink-0">
                     <button
-                      onClick={() => setSelectedCourseId(course.id)}
+                      onClick={() => {
+                        setSelectedCourseId(course.id);
+                        setUploadTargetCourseId(course.id);
+                      }}
                       className={`flex items-center gap-2 px-3 py-1.5 rounded-lg font-medium transition ${
                         selectedCourseId === course.id
                           ? 'bg-slate-900 text-white'
@@ -665,7 +797,7 @@ export const LecturesView: React.FC<LecturesViewProps> = ({ onNavigate }) => {
               <h3 className="text-base font-bold text-slate-800">{t.noLecturesTitle}</h3>
               <p className="mt-1 text-xs text-slate-500 max-w-sm mx-auto">{t.noLecturesDesc}</p>
               <button
-                onClick={() => setShowUploadModal(true)}
+                onClick={() => handleOpenUploadModal(selectedCourseId !== 'all' ? selectedCourseId : undefined)}
                 className="mt-4 inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-slate-900 text-white text-xs font-semibold hover:bg-slate-800 transition shadow-xs"
               >
                 <Upload className="w-4 h-4" />
@@ -833,23 +965,50 @@ export const LecturesView: React.FC<LecturesViewProps> = ({ onNavigate }) => {
             <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-xs">
               <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-xl border border-slate-200">
                 <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-4">
-                  <h3 className="font-bold text-slate-900 text-base">{t.uploadLecture}</h3>
+                  <div>
+                    <h3 className="font-bold text-slate-900 text-base">{t.uploadLecture}</h3>
+                    <p className="text-[11px] text-slate-500 mt-0.5">
+                      Upload PDF slides, notes, or documents to your course
+                    </p>
+                  </div>
                   <button
-                    onClick={() => setShowUploadModal(false)}
-                    className="p-1 text-slate-400 hover:text-slate-800 rounded-lg"
+                    onClick={() => {
+                      if (!uploadingFiles) {
+                        setShowUploadModal(false);
+                        setUploadError(null);
+                        setUploadSuccessMsg(null);
+                      }
+                    }}
+                    disabled={uploadingFiles}
+                    className="p-1 text-slate-400 hover:text-slate-800 rounded-lg disabled:opacity-40"
                   >
                     <X className="w-5 h-5" />
                   </button>
                 </div>
+
                 <div className="space-y-4">
                   <div>
-                    <label className="block text-xs font-medium text-slate-700 mb-1">
-                      Target Course
-                    </label>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <label className="block text-xs font-semibold text-slate-700">
+                        Target Course
+                      </label>
+                      {uploadTargetCourseId && (
+                        <span className="text-[11px] font-medium text-blue-600">
+                          Destination:{' '}
+                          <span className="font-semibold">
+                            {courses.find((c) => c.id === uploadTargetCourseId)?.name || 'Selected Course'}
+                          </span>
+                        </span>
+                      )}
+                    </div>
                     <select
                       value={uploadTargetCourseId}
-                      onChange={(e) => setUploadTargetCourseId(e.target.value)}
-                      className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-800 bg-white"
+                      onChange={(e) => {
+                        setUploadTargetCourseId(e.target.value);
+                        setUploadError(null);
+                      }}
+                      disabled={uploadingFiles}
+                      className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-800 bg-white disabled:bg-slate-100 disabled:text-slate-400"
                     >
                       {courses.map((c) => (
                         <option key={c.id} value={c.id}>
@@ -860,8 +1019,14 @@ export const LecturesView: React.FC<LecturesViewProps> = ({ onNavigate }) => {
                   </div>
 
                   <div
-                    onClick={() => fileInputRef.current?.click()}
-                    className="border-2 border-dashed border-slate-300 hover:border-slate-400 rounded-2xl p-8 text-center cursor-pointer bg-slate-50 hover:bg-slate-100/50 transition"
+                    onClick={() => {
+                      if (!uploadingFiles) fileInputRef.current?.click();
+                    }}
+                    className={`border-2 border-dashed rounded-2xl p-8 text-center transition ${
+                      uploadingFiles
+                        ? 'border-slate-200 bg-slate-50 cursor-not-allowed opacity-60'
+                        : 'border-slate-300 hover:border-slate-400 bg-slate-50 hover:bg-slate-100/60 cursor-pointer'
+                    }`}
                   >
                     <input
                       ref={fileInputRef}
@@ -869,6 +1034,7 @@ export const LecturesView: React.FC<LecturesViewProps> = ({ onNavigate }) => {
                       multiple
                       accept=".pdf,.docx,.doc,.pptx,.ppt,.txt,image/*"
                       onChange={handleFileUpload}
+                      disabled={uploadingFiles}
                       className="hidden"
                     />
                     <Upload className="w-8 h-8 text-slate-400 mx-auto mb-2" />
@@ -876,20 +1042,43 @@ export const LecturesView: React.FC<LecturesViewProps> = ({ onNavigate }) => {
                     <p className="text-[11px] text-slate-500 mt-1">{t.supportedFormats}</p>
                   </div>
 
-                  {uploadingFiles && (
-                    <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl flex items-center gap-2 text-xs text-blue-800">
-                      <Clock className="w-4 h-4 animate-spin text-blue-600 shrink-0" />
-                      <span>{uploadStatusMsg || t.processingFile}</span>
+                  {uploadError && (
+                    <div className="p-3 bg-red-50 border border-red-200 rounded-xl flex items-start gap-2.5 text-xs text-red-800 animate-fadeIn">
+                      <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                      <div className="flex-1">
+                        <p className="font-semibold">Upload Failed</p>
+                        <p className="mt-0.5 text-red-700 leading-relaxed">{uploadError}</p>
+                      </div>
                     </div>
                   )}
 
-                  <div className="flex justify-end">
+                  {uploadingFiles && (
+                    <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl flex items-center gap-2.5 text-xs text-blue-800 animate-fadeIn">
+                      <Clock className="w-4 h-4 animate-spin text-blue-600 shrink-0" />
+                      <span className="font-medium">{uploadStatusMsg || t.processingFile}</span>
+                    </div>
+                  )}
+
+                  {uploadSuccessMsg && (
+                    <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center gap-2.5 text-xs text-emerald-800 animate-fadeIn">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                      <span className="font-medium">{uploadSuccessMsg}</span>
+                    </div>
+                  )}
+
+                  <div className="flex justify-end gap-2 pt-2">
                     <button
                       type="button"
-                      onClick={() => setShowUploadModal(false)}
-                      className="px-4 py-2 border border-slate-300 text-slate-700 rounded-xl text-xs font-medium hover:bg-slate-50 transition"
+                      disabled={uploadingFiles}
+                      onClick={() => {
+                        setShowUploadModal(false);
+                        setUploadError(null);
+                        setUploadSuccessMsg(null);
+                        setUploadStatusMsg('');
+                      }}
+                      className="px-4 py-2 border border-slate-300 text-slate-700 rounded-xl text-xs font-medium hover:bg-slate-50 transition disabled:opacity-40"
                     >
-                      {t.cancel}
+                      {uploadSuccessMsg ? 'Done' : t.cancel}
                     </button>
                   </div>
                 </div>
